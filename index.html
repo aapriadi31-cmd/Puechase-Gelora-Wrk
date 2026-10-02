@@ -3,15 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Smart Procurement & Cashflow Apotek (Firebase Cloud Edition)</title>
+  <title>Smart Procurement Apotek (Supabase Edition)</title>
   
   <!-- Chart.js & SheetJS (Excel Parser) CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
-  <!-- Firebase SDK Compat (App & Firestore) -->
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <!-- Supabase JS Client SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <style>
     :root {
@@ -220,11 +219,11 @@
   <header>
     <div>
       <h1>🏥 Smart Procurement Apotek</h1>
-      <div class="subtitle">Cloud Firestore Realtime Sync Edition</div>
+      <div class="subtitle">Supabase Cloud Database Edition</div>
     </div>
     <div class="sync-status">
       <div class="status-dot" id="cloudStatusDot"></div>
-      <span id="cloudStatusText">Terhubung ke Cloud</span>
+      <span id="cloudStatusText">Mengecek Supabase...</span>
     </div>
   </header>
 
@@ -805,35 +804,23 @@
 
   <script>
     // ==========================================
-    // 1. KONFIGURASI FIREBASE CLOUD FIRESTORE
+    // 1. KONFIGURASI SUPABASE DATABASE
     // ==========================================
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
-const firebaseConfig = {
-  apiKey: "AIzaSyBKmkXUc77cDt88YcYUHe3XJ9VrA0ylOoI",
-  authDomain: "apotek-smart-procurement.firebaseapp.com",
-  databaseURL: "https://apotek-smart-procurement-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "apotek-smart-procurement",
-  storageBucket: "apotek-smart-procurement.firebasestorage.app",
-  messagingSenderId: "512414125885",
-  appId: "1:512414125885:web:b266303151355bfd92bf54",
-  measurementId: "G-BGY2X5L7ZH"
-};
+    const SUPABASE_URL = "https://doeqvafhmuhwloshvhcz.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRvZXF2YWZobXVod2xvc2h2aGN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA5NTg5NjIsImV4cCI6MjEwNjUzNDk2Mn0.oIa4S88iJmjm4yoiceL1GhpPhNzru3f6cWavZhjTmBc";
 
-    // Inisialisasi Firebase
-    let dbFirestore = null;
+    let supabaseClient = null;
     try {
-      firebase.initializeApp(firebaseConfig);
-      dbFirestore = firebase.firestore();
-      
-      // Aktifkan Offline Persistence agar tetap bisa bekerja saat koneksi terputus
-      dbFirestore.enablePersistence().catch(err => console.log("Offline mode warning:", err.code));
+      if (SUPABASE_URL.startsWith("https")) {
+        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      }
     } catch (e) {
-      console.warn("Firebase belum diatur atau API Key belum diisi. Menggunakan Local Fallback mode.");
+      console.warn("Supabase credentials belum diisi.");
     }
 
     const TARIF_PPN = 0.11;
 
-    // Database Local Model (Di-sync dengan Firestore secara Realtime)
+    // Database Local State
     let db = {
       suppliers: [],
       products: [],
@@ -842,82 +829,74 @@ const firebaseConfig = {
       fakturList: []
     };
 
-    // Listening Realtime Snapshot dari Firebase Cloud
-    function initFirebaseRealtimeSync() {
-      if (!dbFirestore) return;
-
-      const collections = ['suppliers', 'products', 'purchaseOrders', 'blockedItems', 'fakturList'];
-      let loadedCount = 0;
-
-      collections.forEach(colName => {
-        dbFirestore.collection(colName).onSnapshot(snapshot => {
-          db[colName] = [];
-          snapshot.forEach(doc => {
-            db[colName].push({ docId: doc.id, ...doc.data() });
-          });
-          
-          loadedCount++;
-          document.getElementById('cloudStatusText').innerText = "Terhubung Realtime Cloud";
-          document.getElementById('cloudStatusDot').style.background = "#10b981";
-
-          // Render Ulang Tab Aktif
-          const activeTab = document.querySelector('.bottom-nav button.active')?.id.replace('tab-', '') || 'dashboard';
-          if (activeTab === 'dashboard') renderDashboard();
-          if (activeTab === 'cek-fisik') renderCekFisik();
-          if (activeTab === 'master') renderMasterTab();
-          if (activeTab === 'utang') renderUtang();
-          if (activeTab === 'sp') renderDraftSP();
-          if (activeTab === 'import') renderImportTab();
-        }, err => {
-          console.error("Cloud sync error:", err);
-          document.getElementById('cloudStatusText').innerText = "Koneksi Cloud Error / Offline";
-          document.getElementById('cloudStatusDot').style.background = "#ef4444";
-        });
-      });
-
-      // Jalankan Otomatis Migrasi Data Lama dari LocalStorage jika Cloud Kosong
-      setTimeout(checkAndMigrateLocalStorageToCloud, 2000);
-    }
-
-    // SIMPAN DATA KE CLOUD FIRESTORE
-    async function saveToCloud(collectionName, itemData) {
-      if (!dbFirestore) return;
-      const docId = String(itemData.id || itemData.docId || Date.now());
-      delete itemData.docId; // Bersihkan metadata temp
-      try {
-        await dbFirestore.collection(collectionName).doc(docId).set(itemData, { merge: true });
-      } catch (err) { console.error("Gagal menyimpan ke cloud:", err); }
-    }
-
-    // HAPUS DATA DARI CLOUD FIRESTORE
-    async function deleteFromCloud(collectionName, itemId) {
-      if (!dbFirestore) return;
-      try {
-        await dbFirestore.collection(collectionName).doc(String(itemId)).delete();
-      } catch (err) { console.error("Gagal menghapus dari cloud:", err); }
-    }
-
-    // MIGRASI OTOMATIS LOCALSTORAGE KE FIRESTORE (Agar Data Lama Tidak Hilang)
-    async function checkAndMigrateLocalStorageToCloud() {
-      if (!dbFirestore) return;
-      
-      const localSuppliers = JSON.parse(localStorage.getItem('db_procurement_suppliers'));
-      if (localSuppliers && localSuppliers.length > 0 && db.suppliers.length === 0) {
-        if (confirm("Ditemukan data lama di komputer ini. Apakah Anda ingin mengunggahnya ke Cloud Firebase secara otomatis?")) {
-          const localProducts = JSON.parse(localStorage.getItem('db_procurement_products')) || [];
-          const localPo = JSON.parse(localStorage.getItem('db_procurement_po')) || [];
-          const localBlocked = JSON.parse(localStorage.getItem('db_procurement_blocked')) || [];
-          const localFaktur = JSON.parse(localStorage.getItem('db_procurement_faktur')) || [];
-
-          for (let s of localSuppliers) await saveToCloud('suppliers', s);
-          for (let p of localProducts) await saveToCloud('products', p);
-          for (let po of localPo) await saveToCloud('purchaseOrders', po);
-          for (let b of localBlocked) await saveToCloud('blockedItems', b);
-          for (let f of localFaktur) await saveToCloud('fakturList', f);
-
-          alert("Migrasi Data ke Cloud Firebase Berhasil!");
-        }
+    // LOAD SEMUA DATA DARI SUPABASE
+    async function loadAllDataFromSupabase() {
+      if (!supabaseClient) {
+        document.getElementById('cloudStatusText').innerText = "Belum Diisi API Key";
+        document.getElementById('cloudStatusDot').style.background = "#ef4444";
+        return;
       }
+
+      try {
+        const [resSupp, resProd, resPo, resBlock, resFak] = await Promise.all([
+          supabaseClient.from('suppliers').select('*'),
+          supabaseClient.from('products').select('*'),
+          supabaseClient.from('purchaseOrders').select('*'),
+          supabaseClient.from('blockedItems').select('*'),
+          supabaseClient.from('fakturList').select('*')
+        ]);
+
+        if (resSupp.data) db.suppliers = resSupp.data;
+        if (resProd.data) db.products = resProd.data;
+        if (resPo.data) db.purchaseOrders = resPo.data;
+        if (resBlock.data) db.blockedItems = resBlock.data;
+        if (resFak.data) db.fakturList = resFak.data;
+
+        document.getElementById('cloudStatusText').innerText = "🟢 Terhubung Supabase";
+        document.getElementById('cloudStatusDot').style.background = "#10b981";
+
+        refreshActiveTabUI();
+      } catch (err) {
+        console.error("Gagal muat data Supabase:", err);
+        document.getElementById('cloudStatusText').innerText = "Gagal Terhubung Cloud";
+        document.getElementById('cloudStatusDot').style.background = "#ef4444";
+      }
+    }
+
+    // SIMPAN / UPDATE KE SUPABASE
+    async function saveToCloud(tableName, itemData) {
+      if (!supabaseClient) return;
+      try {
+        const payload = { ...itemData, id: String(itemData.id || Date.now()) };
+        const { error } = await supabaseClient.from(tableName).upsert([payload]);
+        if (error) throw error;
+        await loadAllDataFromSupabase();
+      } catch (err) {
+        console.error(`Gagal menyimpan ke tabel ${tableName}:`, err);
+        alert(`Error Supabase [${tableName}]: ${err.message}`);
+      }
+    }
+
+    // HAPUS DARI SUPABASE
+    async function deleteFromCloud(tableName, itemId) {
+      if (!supabaseClient) return;
+      try {
+        const { error } = await supabaseClient.from(tableName).delete().eq('id', String(itemId));
+        if (error) throw error;
+        await loadAllDataFromSupabase();
+      } catch (err) {
+        console.error(`Gagal menghapus dari ${tableName}:`, err);
+      }
+    }
+
+    function refreshActiveTabUI() {
+      const activeTab = document.querySelector('.bottom-nav button.active')?.id.replace('tab-', '') || 'dashboard';
+      if (activeTab === 'dashboard') renderDashboard();
+      if (activeTab === 'cek-fisik') renderCekFisik();
+      if (activeTab === 'master') renderMasterTab();
+      if (activeTab === 'utang') renderUtang();
+      if (activeTab === 'sp') renderDraftSP();
+      if (activeTab === 'import') renderImportTab();
     }
 
     // Helper functions
@@ -1011,9 +990,9 @@ const firebaseConfig = {
       return Math.floor((today - last) / (1000 * 60 * 60 * 24));
     }
 
-    // 1. DASHBOARD & SMART CASH ALLOCATOR
+    // 1. DASHBOARD
     function renderDashboard() {
-      const totalUtang = db.fakturList.reduce((acc, f) => acc + f.sisaUtang, 0);
+      const totalUtang = db.fakturList.reduce((acc, f) => acc + (f.sisaUtang || 0), 0);
       document.getElementById('dashTotalUtang').innerText = 'Rp ' + totalUtang.toLocaleString('id-ID');
 
       const today = new Date();
@@ -1023,8 +1002,8 @@ const firebaseConfig = {
       db.fakturList.forEach(f => {
         if (f.status === 'BELUM_LUNAS') {
           const tglTol = new Date(f.tglToleransi || f.tglJatuhTempo);
-          if (tglTol < today) utangKritis += f.sisaUtang;
-          else if (tglTol <= next7) utangMingguIni += f.sisaUtang;
+          if (tglTol < today) utangKritis += (f.sisaUtang || 0);
+          else if (tglTol <= next7) utangMingguIni += (f.sisaUtang || 0);
         }
       });
 
@@ -1033,17 +1012,6 @@ const firebaseConfig = {
 
       const overdueCount = db.products.filter(p => !p.isDiscontinued && getAuditDiffDays(p.lastCheckedDate) >= 7).length;
       document.getElementById('dashAuditOverdue').innerText = overdueCount + ' Item';
-
-      let estNilaiOrder = 0;
-      db.products.filter(p => !p.isDiscontinued).forEach(p => {
-        const target10 = (p.lajuHarian || 0) * 10;
-        const packSize = p.packSizeNum || 1;
-        const qtyOrderBox = Math.ceil(Math.max(0, target10 - p.stokFisik) / packSize);
-        if (qtyOrderBox > 0) {
-          const cheapestPbf = getCheapestPbfForProduct(p);
-          estNilaiOrder += qtyOrderBox * (cheapestPbf ? cheapestPbf.hargaTerakhir : 0);
-        }
-      });
 
       renderKomparasiHargaTable();
       renderCashflowChart();
@@ -1123,14 +1091,14 @@ const firebaseConfig = {
 
     function renderCashflowChart() {
       const ctx = document.getElementById('chartCashflow').getContext('2d');
-      if (chartInstance) chartInstance.destroy();
+      if (window.chartInstance) window.chartInstance.destroy();
 
-      chartInstance = new Chart(ctx, {
+      window.chartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
           labels: ['Minggu 1', 'Minggu 2', 'Minggu 3', 'Minggu 4'],
           datasets: [{
-            label: 'Tagihan Berdasarkan Toleransi PBF (Rp)',
+            label: 'Proyeksi Tagihan (Rp)',
             data: [277500, 500000, 1200000, 350000],
             backgroundColor: '#0284c7',
             borderRadius: 4
@@ -1173,9 +1141,9 @@ const firebaseConfig = {
           const data = new Uint8Array(evt.target.result);
           const workbook = XLSX.read(data, { type: 'array' });
           const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          excelRawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
-          if (excelRawData && excelRawData.length > 0) {
-            populateColumnSelectors(excelRawData[0]);
+          window.excelRawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+          if (window.excelRawData && window.excelRawData.length > 0) {
+            populateColumnSelectors(window.excelRawData[0]);
             document.getElementById('wrapperMapping').style.display = 'block';
           }
         } catch (err) { alert('Gagal membaca file Excel: ' + err.message); }
@@ -1221,16 +1189,16 @@ const firebaseConfig = {
 
       if (isNaN(idxNama) || isNaN(idxHarga)) return alert('Pilih Kolom Nama Barang dan Kolom Harga!');
 
-      importParsedResults = [];
+      window.importParsedResults = [];
 
-      for (let i = 1; i < excelRawData.length; i++) {
-        const row = excelRawData[i];
+      for (let i = 1; i < window.excelRawData.length; i++) {
+        const row = window.excelRawData[i];
         if (!row || row.length === 0) continue;
 
         const rawNamaBarang = String(row[idxNama] || '').trim();
         if (!rawNamaBarang) continue;
 
-        const isBlocked = db.blockedItems.some(b => normalizeString(b.name) === normalizeString(rawNamaBarang) && (b.pbfName === selectedPbf || b.pbfName.includes('ALL')));
+        const isBlocked = db.blockedItems.some(b => normalizeString(b.name) === normalizeString(rawNamaBarang) && (b.pbfName === selectedPbf || b.pbfName?.includes('ALL')));
 
         const rawHarga = parseNumberClean(row[idxHarga]);
         const rawSatuan = idxSatuan !== -1 ? String(row[idxSatuan] || 'Box').trim() : 'Box';
@@ -1280,7 +1248,7 @@ const firebaseConfig = {
           }
         }
 
-        importParsedResults.push({ rawNamaBarang, rawSatuan, rawHarga, rawDisc, rawBonus, isKosong, matchedProdId, matchType, matchScore, isBlocked });
+        window.importParsedResults.push({ rawNamaBarang, rawSatuan, rawHarga, rawDisc, rawBonus, isKosong, matchedProdId, matchType, matchScore, isBlocked });
       }
 
       renderPreviewImportTable(selectedPbf);
@@ -1290,7 +1258,7 @@ const firebaseConfig = {
       const container = document.getElementById('tblPreviewImport');
       let html = '';
 
-      importParsedResults.forEach((item, idx) => {
+      window.importParsedResults.forEach((item, idx) => {
         let badgeStatus = item.matchType === 'BLOCKED' ? `<span class="badge badge-dark">Diblokir</span>` :
                           item.matchType === 'EXACT' ? `<span class="badge badge-success">100% Pas</span>` :
                           item.matchType === 'FUZZY' ? `<span class="badge badge-purple">${item.matchScore}% Mirip</span>` :
@@ -1304,7 +1272,7 @@ const firebaseConfig = {
               ${item.isBlocked ? '<i>Diabaikan (Diblokir / Discontinued)</i>' : `
                 <select onchange="updateImportRowMatch(${idx}, this.value)">
                   <option value="">-- Buat Master Baru --</option>
-                  ${db.products.filter(p => !p.isDiscontinued).map(p => `<option value="${p.id}" ${item.matchedProdId === p.id ? 'selected' : ''}>${p.namaInternal} (${p.satuanOrder})</option>`).join('')}
+                  ${db.products.filter(p => !p.isDiscontinued).map(p => `<option value="${p.id}" ${String(item.matchedProdId) === String(p.id) ? 'selected' : ''}>${p.namaInternal} (${p.satuanOrder})</option>`).join('')}
                 </select>
               `}
             </td>
@@ -1324,31 +1292,30 @@ const firebaseConfig = {
     }
 
     function updateImportRowMatch(importIdx, newProdId) {
-      importParsedResults[importIdx].matchedProdId = newProdId ? parseInt(newProdId) : null;
-      importParsedResults[importIdx].matchType = newProdId ? 'EXACT' : 'UNMATCHED';
+      window.importParsedResults[importIdx].matchedProdId = newProdId ? newProdId : null;
+      window.importParsedResults[importIdx].matchType = newProdId ? 'EXACT' : 'UNMATCHED';
     }
 
     async function blockItemFromImport(rawName, pbfName) {
-      const blockedObj = { id: Date.now(), name: rawName, pbfName, date: new Date().toISOString().split('T')[0] };
-      await saveToCloud('blockedItems', blockedObj);
+      await saveToCloud('blockedItems', { id: String(Date.now()), name: rawName, pbfName, date: new Date().toISOString().split('T')[0] });
       prosesSyncDataImport();
     }
 
     async function unblockItemFromImport(rawName, pbfName) {
-      const itemToDel = db.blockedItems.find(b => normalizeString(b.name) === normalizeString(rawName) && (b.pbfName === pbfName || b.pbfName.includes('ALL')));
-      if (itemToDel) await deleteFromCloud('blockedItems', itemToDel.id || itemToDel.docId);
+      const itemToDel = db.blockedItems.find(b => normalizeString(b.name) === normalizeString(rawName) && (b.pbfName === pbfName || b.pbfName?.includes('ALL')));
+      if (itemToDel) await deleteFromCloud('blockedItems', itemToDel.id);
       prosesSyncDataImport();
     }
 
     async function simpanSemuaHasilImport() {
       const selectedPbf = document.getElementById('importPbfSelect').value;
-      let appliedCount = 0; let autoCreatedCount = 0;
+      let appliedCount = 0;
 
-      for (let item of importParsedResults) {
+      for (let item of window.importParsedResults) {
         if (item.isBlocked) continue;
 
         if (item.matchedProdId) {
-          const prod = db.products.find(p => p.id === item.matchedProdId);
+          const prod = db.products.find(p => String(p.id) === String(item.matchedProdId));
           if (prod) {
             if (!prod.pbfMappings) prod.pbfMappings = [];
             let mapEntry = prod.pbfMappings.find(m => m.pbfName === selectedPbf);
@@ -1363,17 +1330,17 @@ const firebaseConfig = {
           }
         } else {
           const newProd = {
-            id: Date.now() + Math.floor(Math.random() * 1000),
+            id: String(Date.now() + Math.floor(Math.random() * 1000)),
             namaInternal: item.rawNamaBarang, satuanOrder: item.rawSatuan || 'Box', packSizeNum: 100, satuanJual: 'unit', lajuHarian: 1, stokFisik: 0,
             lastCheckedDate: new Date().toISOString().split('T')[0], isDiscontinued: false,
             pbfMappings: [{ pbfName: selectedPbf, aliasPbf: item.rawNamaBarang, hargaTerakhir: item.rawHarga, diskon: item.rawDisc, bonus: item.rawBonus, isKosong: item.isKosong }]
           };
           await saveToCloud('products', newProd);
-          autoCreatedCount++; appliedCount++;
+          appliedCount++;
         }
       }
 
-      alert(`Berhasil memperbarui ${appliedCount} produk ke Cloud Firebase!`); switchTab('dashboard');
+      alert(`Berhasil memperbarui ${appliedCount} produk ke Supabase Cloud!`); switchTab('dashboard');
     }
 
     // 3. CEK FISIK
@@ -1432,7 +1399,7 @@ const firebaseConfig = {
             <div style="display:flex; justify-content:space-between; align-items:flex-start;">
               <div>
                 <strong style="font-size:0.95rem;">${p.namaInternal}</strong>
-                ${isOverdue ? '<span class="badge badge-purple" style="margin-left:6px;">⚠️ Audit Overdue (>7H)</span>' : '<span class="badge badge-success" style="margin-left:6px;">✔️ Audit Fresh</span>'}
+                ${isOverdue ? '<span class="badge badge-purple" style="margin-left:6px;">⚠️ Audit Overdue (>7H)</span>' : '<span class="badge badge-success" style="margin-left:6px;">✔️️ Audit Fresh</span>'}
                 <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Konversi: 1 ${p.satuanOrder} = ${packSize} ${p.satuanJual} | Tgl Audit: ${p.lastCheckedDate || 'Belum Pernah'}</div>
                 <div style="font-size:0.75rem; color:var(--text-muted);">PBF Dipilih: <span class="badge ${cheapestPbf ? 'badge-pbf' : 'badge-danger'}">${cheapestPbf ? cheapestPbf.pbfName : 'Kosong'}</span></div>
                 ${warningText}
@@ -1464,7 +1431,7 @@ const firebaseConfig = {
     }
 
     async function markProductAuditedCloud(prodId) {
-      const p = db.products.find(x => x.id === prodId);
+      const p = db.products.find(x => String(x.id) === String(prodId));
       if (p) {
         p.lastCheckedDate = new Date().toISOString().split('T')[0];
         await saveToCloud('products', p);
@@ -1472,7 +1439,7 @@ const firebaseConfig = {
     }
 
     async function updateProductFieldCloud(prodId, field, val) {
-      const p = db.products.find(x => x.id === prodId);
+      const p = db.products.find(x => String(x.id) === String(prodId));
       if (p) {
         p[field] = parseFloat(val) || 0;
         p.lastCheckedDate = new Date().toISOString().split('T')[0];
@@ -1551,10 +1518,9 @@ const firebaseConfig = {
 
       if (items.length === 0) return alert('Tidak ada item order untuk PBF ini.');
 
-      const newPo = { id: 'PO-' + Date.now(), poNo, pbfName, tglPo: new Date().toISOString().split('T')[0], items, status: 'PENDING' };
+      const newPo = { id: String('PO-' + Date.now()), poNo, pbfName, tglPo: new Date().toISOString().split('T')[0], items, status: 'PENDING' };
       await saveToCloud('purchaseOrders', newPo);
       alert(`Surat Pesanan ${poNo} Resmi Diterbitkan & Tersimpan di Cloud!`);
-      renderDraftSP();
     }
 
     function renderActivePoTable() {
@@ -1564,7 +1530,7 @@ const firebaseConfig = {
           <td><strong>${po.poNo}</strong></td>
           <td>${po.pbfName}</td>
           <td>${po.tglPo}</td>
-          <td>${po.items.length} Item</td>
+          <td>${(po.items || []).length} Item</td>
           <td><span class="badge ${po.status === 'COMPLETED' ? 'badge-success' : 'badge-pbf'}">${po.status}</span></td>
           <td>
             ${po.status !== 'COMPLETED' ? `<button class="btn btn-outline" style="padding:2px 6px; font-size:0.7rem;" onclick="bukaFakturDariPo('${po.poNo}')">Proses Penerimaan Faktur</button>` : '✅ Selesai'}
@@ -1601,8 +1567,8 @@ const firebaseConfig = {
       const tbody = document.getElementById('tbodyItemFaktur');
       tbody.innerHTML = '';
 
-      po.items.forEach(item => {
-        const prod = db.products.find(p => p.id === item.prodId);
+      (po.items || []).forEach(item => {
+        const prod = db.products.find(p => String(p.id) === String(item.prodId));
         const sisaBox = item.qtyBox - item.qtyReceivedBox;
         if (sisaBox > 0) {
           const tr = document.createElement('tr');
@@ -1658,7 +1624,7 @@ const firebaseConfig = {
       if (!p) return;
 
       const pbfName = document.getElementById('fakturPbfId').value;
-      const m = (p.pbfMappings || []).find(x => x.pbfName === pbfName) || p.pbfMappings[0];
+      const m = (p.pbfMappings || []).find(x => x.pbfName === pbfName) || (p.pbfMappings || [])[0];
 
       const tbody = document.getElementById('tbodyItemFaktur');
       const tr = document.createElement('tr');
@@ -1724,14 +1690,13 @@ const firebaseConfig = {
       const tol = new Date(tglJatuhTempo); tol.setDate(tol.getDate() + toleranceDays);
       const tglToleransi = tol.toISOString().split('T')[0];
 
-      // Update stok & tracking PO di Cloud
       for (let row of document.querySelectorAll('#tbodyItemFaktur tr')) {
         const prodId = row.querySelector('.item-prod-id').value;
         const qtyReal = parseInt(row.querySelector('.item-qty-real').value) || 0;
 
         const prod = db.products.find(p => String(p.id) === String(prodId));
         if (prod) {
-          prod.stokFisik += qtyReal * (prod.packSizeNum || 1);
+          prod.stokFisik = (prod.stokFisik || 0) + (qtyReal * (prod.packSizeNum || 1));
           prod.lastCheckedDate = new Date().toISOString().split('T')[0];
           await saveToCloud('products', prod);
         }
@@ -1739,8 +1704,8 @@ const firebaseConfig = {
         if (poNo) {
           const po = db.purchaseOrders.find(x => x.poNo === poNo);
           if (po) {
-            const poItem = po.items.find(x => String(x.prodId) === String(prodId));
-            if (poItem) poItem.qtyReceivedBox += qtyReal;
+            const poItem = (po.items || []).find(x => String(x.prodId) === String(prodId));
+            if (poItem) poItem.qtyReceivedBox = (poItem.qtyReceivedBox || 0) + qtyReal;
           }
         }
       }
@@ -1748,16 +1713,16 @@ const firebaseConfig = {
       if (poNo) {
         const po = db.purchaseOrders.find(x => x.poNo === poNo);
         if (po) {
-          const allCompleted = po.items.every(x => x.qtyReceivedBox >= x.qtyBox);
+          const allCompleted = (po.items || []).every(x => x.qtyReceivedBox >= x.qtyBox);
           po.status = allCompleted ? 'COMPLETED' : 'PARTIAL';
           await saveToCloud('purchaseOrders', po);
         }
       }
 
-      const newFaktur = { id: 'FAK-' + Date.now(), noFaktur, poNo, pbfName, tglFaktur, tglJatuhTempo, tglToleransi, totalUtang: grandTotal, sisaUtang: grandTotal, status: 'BELUM_LUNAS' };
+      const newFaktur = { id: String('FAK-' + Date.now()), noFaktur, poNo, pbfName, tglFaktur, tglJatuhTempo, tglToleransi, totalUtang: grandTotal, sisaUtang: grandTotal, status: 'BELUM_LUNAS' };
       await saveToCloud('fakturList', newFaktur);
 
-      alert('Faktur penerimaan tersimpan & Utang tercatat di Cloud!');
+      alert('Faktur penerimaan tersimpan & Utang tercatat di Supabase!');
       document.getElementById('formPenerimaanFaktur').reset();
       document.getElementById('tbodyItemFaktur').innerHTML = '';
       switchTab('utang');
@@ -1779,7 +1744,7 @@ const firebaseConfig = {
             <td>${f.tglFaktur}</td>
             <td>${f.tglJatuhTempo}</td>
             <td style="color:${isPastTolerance ? 'var(--danger)' : 'var(--text)'}; font-weight:bold;">${f.tglToleransi || f.tglJatuhTempo}</td>
-            <td><strong>Rp ${f.sisaUtang.toLocaleString('id-ID')}</strong></td>
+            <td><strong>Rp ${(f.sisaUtang || 0).toLocaleString('id-ID')}</strong></td>
             <td><span class="badge ${f.status === 'LUNAS' ? 'badge-success' : isPastTolerance ? 'badge-danger' : 'badge-alt'}">${f.status === 'LUNAS' ? 'LUNAS' : isPastTolerance ? 'LEWAT TOLERANSI' : 'AMAN'}</span></td>
             <td>${f.status === 'BELUM_LUNAS' ? `<button class="btn btn-success" style="padding:4px 8px; font-size:0.75rem;" onclick="lunasiUtangCloud('${f.id}')">Bayar Lunas</button>` : '✅'}</td>
           </tr>
@@ -1847,15 +1812,14 @@ const firebaseConfig = {
 
     async function simpanPbf(e) {
       e.preventDefault();
-      const id = document.getElementById('pbfEditId').value || Date.now();
+      const id = document.getElementById('pbfEditId').value || String(Date.now());
       const name = document.getElementById('pbfNameInput').value.trim();
       const taxType = document.getElementById('pbfTaxInput').value;
       const defaultTop = parseInt(document.getElementById('pbfTopInput').value) || 30;
       const behavior = document.getElementById('pbfBehaviorInput').value;
       const toleranceDays = parseInt(document.getElementById('pbfToleranceInput').value) || 0;
 
-      const pbfObj = { id, name, taxType, defaultTop, behavior, toleranceDays };
-      await saveToCloud('suppliers', pbfObj);
+      await saveToCloud('suppliers', { id, name, taxType, defaultTop, behavior, toleranceDays });
       closeModalPbf();
     }
 
@@ -1906,13 +1870,11 @@ const firebaseConfig = {
         await saveToCloud('products', p);
 
         const todayStr = new Date().toISOString().split('T')[0];
-        const block1 = { id: Date.now() + Math.random(), name: p.namaInternal, pbfName: 'ALL PBF', date: todayStr };
-        await saveToCloud('blockedItems', block1);
+        await saveToCloud('blockedItems', { id: String(Date.now() + Math.random()), name: p.namaInternal, pbfName: 'ALL PBF', date: todayStr });
 
         for (let m of (p.pbfMappings || [])) {
           if (m.aliasPbf) {
-            const block2 = { id: Date.now() + Math.random(), name: m.aliasPbf, pbfName: m.pbfName, date: todayStr };
-            await saveToCloud('blockedItems', block2);
+            await saveToCloud('blockedItems', { id: String(Date.now() + Math.random()), name: m.aliasPbf, pbfName: m.pbfName, date: todayStr });
           }
         }
       }
@@ -1926,7 +1888,7 @@ const firebaseConfig = {
       await saveToCloud('products', p);
 
       const itemsToUnblock = db.blockedItems.filter(b => normalizeString(b.name) === normalizeString(p.namaInternal) || (p.pbfMappings || []).some(m => normalizeString(m.aliasPbf) === normalizeString(b.name)));
-      for (let item of itemsToUnblock) await deleteFromCloud('blockedItems', item.id || item.docId);
+      for (let item of itemsToUnblock) await deleteFromCloud('blockedItems', item.id);
     }
 
     function renderBlockedItemsTable() {
@@ -1936,7 +1898,7 @@ const firebaseConfig = {
           <td><strong>${b.name}</strong></td>
           <td><span class="badge badge-pbf">${b.pbfName}</span></td>
           <td>${b.date}</td>
-          <td><button class="btn btn-outline" style="padding:2px 6px; font-size:0.7rem;" onclick="hapusBlockedItemCloud('${b.id || b.docId}')">Buka Blokir</button></td>
+          <td><button class="btn btn-outline" style="padding:2px 6px; font-size:0.7rem;" onclick="hapusBlockedItemCloud('${b.id}')">Buka Blokir</button></td>
         </tr>
       `).join('') || '<tr><td colspan="4" style="text-align:center;">Tidak ada barang diblokir.</td></tr>';
     }
@@ -1988,7 +1950,7 @@ const firebaseConfig = {
 
     async function simpanProduct(e) {
       e.preventDefault();
-      const id = document.getElementById('prodEditId').value || Date.now();
+      const id = document.getElementById('prodEditId').value || String(Date.now());
       const pbfMappings = [];
 
       document.querySelectorAll('#tbodyPbfMappings tr').forEach(row => {
@@ -2002,7 +1964,7 @@ const firebaseConfig = {
       const existingProd = db.products.find(p => String(p.id) === String(id));
 
       const payload = {
-        id,
+        id: String(id),
         namaInternal: document.getElementById('pNamaInternal').value.trim(),
         satuanOrder: document.getElementById('pSatuanOrder').value.trim(),
         packSizeNum: parseInt(document.getElementById('pPackSizeNum').value) || 1,
@@ -2019,13 +1981,13 @@ const firebaseConfig = {
     }
 
     async function hapusProductCloud(id) {
-      if (confirm('Hapus permanen wadah produk ini dari Cloud?')) {
+      if (confirm('Hapus permanen wadah produk ini dari Supabase Cloud?')) {
         await deleteFromCloud('products', id);
       }
     }
 
-    // Inisialisasi awal Sync Realtime Firebase
-    initFirebaseRealtimeSync();
+    // Load Data awal saat pertama dibuka
+    loadAllDataFromSupabase();
   </script>
 </body>
 </html>
